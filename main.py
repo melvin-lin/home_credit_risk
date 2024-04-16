@@ -3,6 +3,7 @@ import os
 import sys
 import optuna
 import logging
+import argparse
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -136,19 +137,33 @@ def perform_lgb(X: pd.DataFrame, y: pd.DataFrame):
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
     study.optimize(objective, n_trials=10)
     return study
-
-def main(): 
-    train = preprocessing.Preprocessing(TRAIN, REGEXES, SCHEMAS).preprocessing(0.80)
-    features = feature_engineering(train)
-    X = train.loc[:, train.columns.isin(features)]
-    y = train["target"]
-    X.to_csv("X_train.csv")
-    y.to_csv("y_train.csv")
-
-    test = preprocessing.Preprocessing(TEST, REGEXES, SCHEMAS).preprocessing(0.80)
-    X_test = test.loc[:, test.columns.isin(features)]
-    X_test.to_csv("X_test.csv")
-
     
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Home Credit Risk Model Stability', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--model', choices=['lgb', 'xgboost'], default='xgboost', help='Choose the model to train')
+    parser.add_argument('--print_viz', default="False", help='Print the visualization from model training/study')
+    parser.add_argument('--disable_preprocess', default="False", default=12, help='Disables the preprocessing step')
+    args = parser.parse_args()
+
+    if not args.disable_preprocess: 
+        train = preprocessing.Preprocessing(TRAIN, REGEXES, SCHEMAS).preprocessing(0.80)
+        features = feature_engineering(train, args.print_viz)
+        train.loc[:, train.columns.isin(features)].to_csv(os.curdir + "/data/train/X_train.csv")
+        train["target"].to_csv(os.curdir + "/data/train/y_train.csv")
+
+    try: 
+        X = pd.read_csv(os.curdir + "/data/train/X_train.csv")
+        y = pd.read_csv(os.curdir + "/data/train/y_train.csv")
+    except: 
+        raise FileNotFoundError
+    
+    if args.model == 'lgb':
+            study = perform_lgb(X,y)
+    elif args.model == 'xgboost': 
+        study = perform_xgboost(X,y)
+    if args.print_viz: 
+        optuna.visualization.plot_optimization_history(study).savefig(f"{args.model}_optimization_history.png")
+        optuna.visualization.plot_slice(study).savefig(f"{args.model}_slice.png")
+        optuna.visualization.plot_param_importances(study).savefig(f"{args.model}_param_importances.png")
+        optuna.visualization.plot_plot_terminator_improvement(study).savefig(f"{args.model}_terminator_improvement.png")
+        

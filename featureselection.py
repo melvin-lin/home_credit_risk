@@ -23,5 +23,5 @@ class FeatureSelection:
             plt.title('Information Gain of Features')
             plt.xlabel('Information Gain')
             plt.ylabel('Feature Name')
-            plt.show()
+            plt.savefig('features.png')
         return list(ig_dict_sorted.keys())[:num_features]
