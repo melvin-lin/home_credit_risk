@@ -99,7 +99,7 @@ def perform_xgboost(X: pd.DataFrame, y: pd.DataFrame):
         stability = gini_stability(valid_X, valid_y, pred_labels)
         return roc, stability
     
-    study = optuna.create_study(direction='maximize')
+    study = optuna.create_study(direction=['maximize', 'maximize'])
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
     study.optimize(objective, n_trials=10)
     return study
@@ -133,16 +133,16 @@ def perform_lgb(X: pd.DataFrame, y: pd.DataFrame):
         stability = gini_stability(valid_X, valid_y, pred_labels)
         return roc, stability
     
-    study = optuna.create_study(direction='maximize')
+    study = optuna.create_study(direction=['maximize', 'maximize'])
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
     study.optimize(objective, n_trials=10)
     return study
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Home Credit Risk Model Stability', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--model', choices=['lgb', 'xgboost'], default='lgb', help='Choose the model to train')
+    parser.add_argument('--model', choices=['lgb', 'xgboost'], default='xgboost', help='Choose the model to train')
     parser.add_argument('--print_viz', default="False", help='Print the visualization from model training/study')
-    parser.add_argument('--disable_preprocess', default="False", help='Disables the preprocessing step')
+    parser.add_argument('--disable_preprocess', default="False", default=12, help='Disables the preprocessing step')
     args = parser.parse_args()
 
     if not args.disable_preprocess: 
