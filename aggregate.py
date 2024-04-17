@@ -2,7 +2,7 @@ import re
 import os
 import polars as pl
 
-import preprocessing
+import preprocessing as preprocessing
 
 class Aggregate: 
 
