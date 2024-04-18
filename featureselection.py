@@ -10,7 +10,7 @@ class FeatureSelection:
         self.X = X
         self.y = y
 
-    def get_information_gain_features(self, plot: bool = False) -> list:
+    def get_information_gain_features(self, num_features: int = None, plot: bool = False) -> list:
         ig = {}
         gain = mutual_info_classif(self.X, self.y)
         for i in range(len(self.X.columns)):
@@ -25,12 +25,15 @@ class FeatureSelection:
             plt.title("Information Gain of Features")
             plt.xlabel("Information Gain")
             plt.ylabel("Feature Name")
-            plt.savefig("features.png", bbox_inches='tight')
+            plt.savefig("features_20.png", bbox_inches='tight')
             plt.clf()
             sns.barplot(x=list(optimized.values()), y=list(optimized.keys()))
             plt.title("Information Gain of Optimized Features")
             plt.xlabel("Information Gain")
             plt.ylabel("Feature Name")
-            plt.savefig("features_optimized.png", bbox_inches='tight')
-    
-        return list(optimized.keys())
+            plt.savefig("features_optimized_20.png", bbox_inches='tight')
+
+        if num_features:
+            return list(optimized.keys())[:num_features]
+        else: 
+            return list(optimized.keys())

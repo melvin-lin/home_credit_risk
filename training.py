@@ -49,10 +49,10 @@ class SaveBestModel(xgb.callback.TrainingCallback):
         return model
 
 
-def feature_engineering(X: pd.DataFrame, y: pd.DataFrame, plot: bool) -> list:
+def feature_engineering(X: pd.DataFrame, y: pd.DataFrame, num_features: int, plot: bool) -> list:
     X = X.loc[:, ~X.columns.isin(["case_id", "WEEK_NUM"])]
     features = featureselection.FeatureSelection(X, y).get_information_gain_features(
-        plot=plot
+        num_features=num_features, plot=plot
     )
     return features
 
@@ -67,7 +67,6 @@ def perform_xgboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
             "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
             "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
             "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
-            "n_estimators": 600,
             "n_estimators": 600,
             "random_state": 42,
         }
@@ -84,12 +83,12 @@ def perform_xgboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
             param["skip_drop"] = trial.suggest_float("skip_drop", 1e-8, 1.0, log=True)
 
         if cv: 
-            pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-auc")
             cvboosters = []
+            pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-auc")
             dtrain = xgb.DMatrix(X, label=y, enable_categorical=True)
             bst = xgb.cv(param, dtrain, num_boost_round=param["n_estimators"], nfold=5, callbacks=[pruning_callback, SaveBestModel(cvboosters)])
             trial.set_user_attr(key="best_booster", value=cvboosters)
-            mean_auc = bst["test-auc-mean"].values[-1]
+            auc = bst["test-auc-mean"].values[-1]
         else:
             pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "validation-auc")
             train_X, valid_X, train_y, valid_y = train_test_split(
@@ -105,8 +104,12 @@ def perform_xgboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
                 callbacks=[pruning_callback]
             )
             trial.set_user_attr(key="best_booster", value=bst)
-            mean_auc = bst["validation-auc-mean"].values[-1]
-        return mean_auc
+            end_iteration = (
+                bst.best_iteration + 1 if bst.best_iteration else param["n_estimators"]
+            )
+            preds = bst.predict(dvalid, iteration_range=(0, end_iteration))
+            auc = roc_auc_score(valid_y, preds)
+        return auc
 
     def get_best_booster(study, trial):
         if study.best_trial.number == trial.number:
@@ -234,17 +237,34 @@ if __name__ == "__main__":
         action="store_true", 
         help="Save the visualizations retrieved from feature engineeering", 
     )
+    parser.add_argument(
+        "--num_features", 
+        type=int, 
+        default=None, 
+        help="Specifies the number of features that you want to keep to train with the model. "
+    )
+    parser.add_argument(
+        "--save_test", 
+        action="store_true", 
+        help="Specify whether you want to download the test data. "
+    )
     args = parser.parse_args()
 
     if not args.disable_preprocess:
         base, X, y = preprocessing.Preprocessing(TRAIN, REGEXES, SCHEMAS).preprocessing(
             0.80
         )
-        features = feature_engineering(X, y.to_numpy().ravel(), args.save_viz)
+        features = feature_engineering(X, y.to_numpy().ravel(), args.num_features, args.save_viz)
+        if args.save_test: 
+            test_base, test_X, test_y = preprocessing.Preprocessing(TRAIN, REGEXES, SCHEMAS).preprocessing(
+                0.80
+            )
+            test_base.to_csv(os.curdir + "/data/test/base.csv")
+            test_X[features].to_csv(os.curdir + "/data/test/X_test.csv")
+            test_y.to_csv(os.curdir + "/data/test/y_test.csv")
         base.to_csv(os.curdir + "/data/train/base.csv")
         X[features].to_csv(os.curdir + "/data/train/X_train.csv")
         y.to_csv(os.curdir + "/data/train/y_train.csv")
-
     try:
         X = pd.read_csv(os.curdir + "/data/train/X_train.csv")
         y = pd.read_csv(os.curdir + "/data/train/y_train.csv")["target"]
