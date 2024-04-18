@@ -64,7 +64,7 @@ def perform_xgboost(X: pd.DataFrame, y: pd.DataFrame, groups: pd.DataFrame, kfol
             "subsample": trial.suggest_float("subsample", 0.2, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.2, 1.0),
             "eval_metric": "auc",
-            "n_estimators": 100,
+            "n_estimators": 600,
             "random_state": 42,
             "max_depth": trial.suggest_int("max_depth", 4, 10, step=2),
             "min_child_weight": trial.suggest_int("min_child_weight", 2, 10),
@@ -135,7 +135,7 @@ def perform_xgboost(X: pd.DataFrame, y: pd.DataFrame, groups: pd.DataFrame, kfol
 
     study = optuna.create_study(direction="maximize")
     study.optimize(
-        objective, n_trials=200, show_progress_bar=True, callbacks=[get_best_booster]
+        objective, n_trials=500, show_progress_bar=True, callbacks=[get_best_booster]
     )
     return study
 
@@ -219,7 +219,7 @@ def perform_lgb(X: pd.DataFrame, y: pd.DataFrame, groups: pd.DataFrame, kfold: s
     study = optuna.create_study(direction="maximize")
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
     study.optimize(
-        objective, n_trials=50, show_progress_bar=True, callbacks=[get_best_booster]
+        objective, n_trials=500, show_progress_bar=True, callbacks=[get_best_booster]
     )
     return study
 
