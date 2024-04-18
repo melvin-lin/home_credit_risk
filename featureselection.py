@@ -25,13 +25,13 @@ class FeatureSelection:
             plt.title("Information Gain of Features")
             plt.xlabel("Information Gain")
             plt.ylabel("Feature Name")
-            plt.savefig("features_20.png", bbox_inches='tight')
+            plt.savefig(f"features_{num_features if num_features is not None else len(list(optimized.keys()))}.png", bbox_inches='tight')
             plt.clf()
             sns.barplot(x=list(optimized.values()), y=list(optimized.keys()))
             plt.title("Information Gain of Optimized Features")
             plt.xlabel("Information Gain")
             plt.ylabel("Feature Name")
-            plt.savefig("features_optimized_20.png", bbox_inches='tight')
+            plt.savefig(f"features_optimized_{num_features if num_features is not None else len(list(optimized.keys()))}.png", bbox_inches='tight')
 
         if num_features:
             return list(optimized.keys())[:num_features]
