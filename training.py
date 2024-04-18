@@ -256,7 +256,7 @@ if __name__ == "__main__":
         )
         features = feature_engineering(X, y.to_numpy().ravel(), args.num_features, args.save_viz)
         if args.save_test: 
-            test_base, test_X, test_y = preprocessing.Preprocessing(TRAIN, REGEXES, SCHEMAS).preprocessing(
+            test_base, test_X, test_y = preprocessing.Preprocessing(TEST, REGEXES, SCHEMAS).preprocessing(
                 0.80
             )
             test_base.to_csv(os.curdir + "/data/test/base.csv")
