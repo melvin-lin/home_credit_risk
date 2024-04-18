@@ -116,8 +116,8 @@ def perform_xgboost(X: pd.DataFrame, y: pd.DataFrame, groups: pd.DataFrame, kfol
                 dtrain=dtrain,
                 num_boost_round=param["n_estimators"],
                 evals=[(dtrain, "train"), (dvalid, "validation")],
-                early_stopping_rounds=25,
-                verbose_eval=100,
+                early_stopping_rounds=100,
+                verbose_eval=200,
             )
             trial.set_user_attr(key="best_booster", value=bst)
             end_iteration = (
@@ -159,6 +159,7 @@ def perform_lgb(X: pd.DataFrame, y: pd.DataFrame, groups: pd.DataFrame, kfold: s
             "min_child_samples": trial.suggest_int("min_child_samples", 1, 100),
             "n_estimators": 600,
             "random_state": 42,
+            "tree_learner": trial.suggest_categorical("tree_learner", ["feature", "voting"]),
         }
 
         if kfold:
@@ -203,7 +204,7 @@ def perform_lgb(X: pd.DataFrame, y: pd.DataFrame, groups: pd.DataFrame, kfold: s
                 param,
                 dtrain,
                 valid_sets=dvalid,
-                callbacks=[lgb.log_evaluation(100), lgb.early_stopping(25)],
+                callbacks=[lgb.log_evaluation(200), lgb.early_stopping(100)],
             )
             trial.set_user_attr(key="best_booster", value=bst)
             preds = bst.predict(valid_X, num_iterations=bst.best_iteration)
