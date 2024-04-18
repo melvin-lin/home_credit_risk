@@ -20,10 +20,17 @@ class FeatureSelection:
 
         if plot:
             sns.set_theme(style="whitegrid")
-            sns.set_theme(rc={"figure.figsize": (12, 8)})
-            sns.barplot(x=list(sorted.values()), y=list(sorted.keys()))
+            sns.set_theme(rc={"figure.figsize": (50, 30)})
+            sns.barplot(x=list(ig_sorted.values()), y=list(ig_sorted.keys()))
             plt.title("Information Gain of Features")
             plt.xlabel("Information Gain")
             plt.ylabel("Feature Name")
-            plt.savefig("features.png")
+            plt.savefig("features.png", bbox_inches='tight')
+            plt.clf()
+            sns.barplot(x=list(optimized.values()), y=list(optimized.keys()))
+            plt.title("Information Gain of Optimized Features")
+            plt.xlabel("Information Gain")
+            plt.ylabel("Feature Name")
+            plt.savefig("features_optimized.png", bbox_inches='tight')
+    
         return list(optimized.keys())

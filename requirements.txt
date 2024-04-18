@@ -8,3 +8,6 @@ numpy
 optuna
 matplotlib
 joblib
+pyarrow
+ipykernel
+optuna-integration
