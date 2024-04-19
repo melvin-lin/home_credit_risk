@@ -11,3 +11,7 @@ joblib
 pyarrow
 ipykernel
 optuna-integration
+cmake
+ninja
+dask[dataframe]
+catboost

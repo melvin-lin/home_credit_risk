@@ -17,11 +17,12 @@ class FileType(str, Enum):
 
 class Preprocessing:
 
-    def __init__(self, directory: str, regexes: list, schemas: dict):
+    def __init__(self, directory: str, regexes: list, schemas: dict, mode: str):
         self.directory = directory
         self.regexes = regexes
         self.schemas = schemas
         self.datastore = {}
+        self.mode = mode
 
     def handle_dates(self, df: pl.DataFrame) -> pl.DataFrame:
         date_schemas = ["date_decision", "^.*_\d.*[D]$"]
@@ -69,7 +70,12 @@ class Preprocessing:
         df = self.handle_dates(df)
         df = df.select(pl.exclude("^.*_right$"))
         df = self.remove_nulls(df, threshold)
-        base = df.select(["case_id", "WEEK_NUM", "target"]).to_pandas()
-        X = self.encoding(df.select(pl.exclude(["case_id", "WEEK_NUM", "target"])))
-        y = df.select("target").to_pandas()
+        if self.mode == "test": 
+            selection = ["case_id", "WEEK_NUM"]
+            y = None
+        else: 
+            selection = ["case_id", "WEEK_NUM", "target"]
+            y = df.select("target").to_pandas()
+        base = df.select(selection).to_pandas()
+        X = self.encoding(df.select(pl.exclude(selection)))
         return base, X, y

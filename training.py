@@ -11,13 +11,15 @@ import pandas as pd
 import polars as pl
 import xgboost as xgb
 import lightgbm as lgb
+import catboost as cb
 
+from catboost import Pool
 from pathlib import Path
 from sklearn.model_selection import (
     train_test_split,
 )
 from sklearn.metrics import roc_auc_score
-from optuna.integration import LightGBMPruningCallback
+from optuna.integration import CatBoostPruningCallback, LightGBMPruningCallback
 
 import preprocessing as preprocessing
 import featureselection
@@ -29,27 +31,30 @@ TEST = ROOT / "test"
 
 SCHEMAS = {
     "date_decision": pl.Date,
-    "^.*_\d.*[D]$": pl.Date,
+    r"^.*_\d.*[D]$": pl.Date,
     "case_id": pl.Int32,
     "WEEK_NUM": pl.Int32,
     "num_group1": pl.Int32,
     "num_group2": pl.Int32,
-    "^.*_\d.*[A|P]$": pl.Float64,
-    "^.*_\d.*[M]$": pl.String,
+    r"^.*_\d.*[A|P]$": pl.Float64,
+    r"^.*_\d.*[M]$": pl.String,
 }
 
 REGEXES = ["^.*_base.*$", "^.*[a-z]_0.*$", "^.*[a-z]_1.*$", "^.*[a-z]_2.*$"]
 
+
 class SaveBestModel(xgb.callback.TrainingCallback):
     def __init__(self, cvboosters):
         self._cvboosters = cvboosters
-    
+
     def after_training(self, model):
         self._cvboosters[:] = [cvpack.bst for cvpack in model.cvfolds]
         return model
 
 
-def feature_engineering(X: pd.DataFrame, y: pd.DataFrame, num_features: int, plot: bool) -> list:
+def feature_engineering(
+    X: pd.DataFrame, y: pd.DataFrame, num_features: int, plot: bool
+) -> list:
     X = X.loc[:, ~X.columns.isin(["case_id", "WEEK_NUM"])]
     features = featureselection.FeatureSelection(X, y).get_information_gain_features(
         num_features=num_features, plot=plot
@@ -64,33 +69,35 @@ def perform_xgboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
             "verbosity": 0,
             "objective": "binary:logistic",
             "eval_metric": "auc",
-            "booster": trial.suggest_categorical("booster", ["gbtree", "gblinear", "dart"]),
-            "lambda": trial.suggest_float("lambda", 1e-8, 1.0, log=True),
+            "booster": "gbtree",
+            "learning_rate": trial.suggest_float("learning_rate", 1e-8, 1, log=True),
+            "lambda": trial.suggest_float("lambda", 1, 10),
             "alpha": trial.suggest_float("alpha", 1e-8, 1.0, log=True),
             "n_estimators": 600,
             "random_state": 42,
+            "max_depth": trial.suggest_int("max_depth", 2, 10, step=2),
+            "gamma": trial.suggest_float("gamma", 1e-8, 1.0, log=True),
         }
 
-        if param["booster"] == "gbtree" or param["booster"] == "dart":
-            param["max_depth"] = trial.suggest_int("max_depth", 1, 9)
-            param["eta"] = trial.suggest_float("eta", 1e-8, 1.0, log=True)
-            param["gamma"] = trial.suggest_float("gamma", 1e-8, 1.0, log=True)
-            param["grow_policy"] = trial.suggest_categorical("grow_policy", ["depthwise", "lossguide"])
-        if param["booster"] == "dart":
-            param["sample_type"] = trial.suggest_categorical("sample_type", ["uniform", "weighted"])
-            param["normalize_type"] = trial.suggest_categorical("normalize_type", ["tree", "forest"])
-            param["rate_drop"] = trial.suggest_float("rate_drop", 1e-8, 1.0, log=True)
-            param["skip_drop"] = trial.suggest_float("skip_drop", 1e-8, 1.0, log=True)
-
-        if cv: 
+        if cv:
             cvboosters = []
-            pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-auc")
+            pruning_callback = optuna.integration.XGBoostPruningCallback(
+                trial, "test-auc"
+            )
             dtrain = xgb.DMatrix(X, label=y, enable_categorical=True)
-            bst = xgb.cv(param, dtrain, num_boost_round=param["n_estimators"], nfold=5, callbacks=[pruning_callback, SaveBestModel(cvboosters)])
+            bst = xgb.cv(
+                param,
+                dtrain,
+                num_boost_round=param["n_estimators"],
+                nfold=5,
+                callbacks=[pruning_callback, SaveBestModel(cvboosters)],
+            )
             trial.set_user_attr(key="best_booster", value=cvboosters)
             auc = bst["test-auc-mean"].values[-1]
         else:
-            pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "validation-auc")
+            pruning_callback = optuna.integration.XGBoostPruningCallback(
+                trial, "validation-auc"
+            )
             train_X, valid_X, train_y, valid_y = train_test_split(
                 X, y, test_size=0.25, shuffle=True, random_state=42
             )
@@ -101,29 +108,115 @@ def perform_xgboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
                 dtrain=dtrain,
                 num_boost_round=param["n_estimators"],
                 evals=[(dtrain, "train"), (dvalid, "validation")],
-                callbacks=[pruning_callback]
+                callbacks=[pruning_callback],
             )
             trial.set_user_attr(key="best_booster", value=bst)
-            end_iteration = (
-                bst.best_iteration + 1 if bst.best_iteration else param["n_estimators"]
-            )
-            preds = bst.predict(dvalid, iteration_range=(0, end_iteration))
+            preds = bst.predict(dvalid, iteration_range=(0, param["n_estimators"]))
             auc = roc_auc_score(valid_y, preds)
         return auc
 
     def get_best_booster(study, trial):
         if study.best_trial.number == trial.number:
-            if isinstance(trial.user_attrs["best_booster"], list): 
+            if isinstance(trial.user_attrs["best_booster"], list):
                 study.set_user_attr(
-                    key="best_booster", value=trial.user_attrs["best_booster"][trial.number]
+                    key="best_booster",
+                    value=trial.user_attrs["best_booster"][trial.number],
                 )
-            else: 
+            else:
                 study.set_user_attr(
                     key="best_booster", value=trial.user_attrs["best_booster"]
                 )
 
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=5)
     study = optuna.create_study(pruner=pruner, direction="maximize")
+    study.optimize(
+        objective, n_trials=100, show_progress_bar=True, callbacks=[get_best_booster]
+    )
+    return study
+
+
+def perform_catboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
+
+    def objective(trial):
+        param = {
+            "objective": trial.suggest_categorical(
+                "objective", ["Logloss", "CrossEntropy"]
+            ),
+            "colsample_bylevel": trial.suggest_float(
+                "colsample_bylevel", 0.01, 1, log=True
+            ),
+            "depth": trial.suggest_int("depth", 2, 12, step=2),
+            "boosting_type": trial.suggest_categorical(
+                "boosting_type", ["Ordered", "Plain"]
+            ),
+            "bootstrap_type": trial.suggest_categorical(
+                "bootstrap_type", ["Bayesian", "Bernoulli", "MVS"]
+            ),
+            "task_type": "GPU",
+            "use_best_model": True,
+            "n_estimators": 600,
+            "random_state": 42,
+            "learning_rate": trial.suggest_float("learning_rate", 1e-8, 1, log=True),
+            "used_ram_limit": "3gb",
+            "eval_metric": "AUC",
+        }
+
+        if param["bootstrap_type"] == "Bayesian":
+            param["bagging_temperature"] = trial.suggest_float(
+                "bagging_temperature", 0, 10
+            )
+        elif param["bootstrap_type"] == "Bernoulli":
+            param["subsample"] = trial.suggest_float("subsample", 0.1, 1, log=True)
+
+        pruning_callback = CatBoostPruningCallback(trial, "AUC")
+        cat = X.columns.to_frame(index=False, name="index")
+        cat_features = cat.loc[
+            X["index"].str.contains(r"categorical_*", na=False)
+        ].index.values
+
+        if cv:
+            dtrain = Pool(data=X, label=y, cat_features=cat_features)
+            cb_cv, bst = cb.cv(
+                pool=dtrain,
+                params=param,
+                fold_count=5,
+                inverted=True,
+                early_stopping_rounds=100,
+                return_models=True,
+                stratified=True,
+            )
+            trial.set_user_attr(key="best_booster", value=bst)
+            auc = cb_cv["test-AUC-mean"].values[-1]
+        else:
+            train_X, valid_X, train_y, valid_y = train_test_split(
+                X, y, test_size=0.25, shuffle=True, random_state=42
+            )
+            dtrain = Pool(data=train_X, label=train_y, cat_features=cat_features)
+            gbm = cb.CatBoostClassifier(**param)
+            gbm.fit(
+                train_X,
+                train_y,
+                eval_set=[(valid_X, valid_y)],
+                verbose=0,
+                early_stopping_rounds=100,
+                callbacks=[pruning_callback],
+            )
+            pruning_callback.check_pruned()
+
+            trial.set_user_attr(key="best_booster", value=gbm)
+            preds = gbm.predict(valid_X, num_iterations=gbm.best_iteration)
+            auc = roc_auc_score(valid_y, preds)
+        return auc
+
+    def get_best_booster(study, trial):
+        if study.best_trial.number == trial.number:
+            study.set_user_attr(
+                key="best_booster", value=trial.user_attrs["best_booster"]
+            )
+
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=5)
+    study = optuna.create_study(pruner=pruner, direction="maximize")
+    optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
     study.optimize(
         objective, n_trials=100, show_progress_bar=True, callbacks=[get_best_booster]
     )
@@ -139,22 +232,23 @@ def perform_lgb(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
             "verbosity": -1,
             "boosting_type": "gbdt",
             "device_type": "cpu",
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 1e-8, 1, log=True),
-            "colsample_bynode": trial.suggest_float("colsample_bynod", 1e-8, 1, log=True),
+            "colsample_bytree": 0.8,
+            "colsample_bynode": 0.8,
             "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
             "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
             "learning_rate": trial.suggest_float("learning_rate", 1e-8, 1, log=True),
             "num_leaves": trial.suggest_int("num_leaves", 2, 256),
             "n_estimators": 600,
-            "extra_trees": True,
             "tree_learner": "voting",
-        }  
+        }
 
-        pruning_callback = LightGBMPruningCallback(trial, "auc")    
+        pruning_callback = LightGBMPruningCallback(trial, "auc")
 
-        if cv: 
+        if cv:
             dtrain = lgb.Dataset(X, label=y)
-            bst = lgb.cv(param, dtrain, callbacks=[pruning_callback], return_cvbooster=True)
+            bst = lgb.cv(
+                param, dtrain, callbacks=[pruning_callback], return_cvbooster=True
+            )
             trial.set_user_attr(key="best_booster", value=bst["cvbooster"])
             auc = bst["valid auc-mean"][0]
         else:
@@ -203,7 +297,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--model",
-        choices=["lgb", "xgboost"],
+        choices=["lgb", "xgboost", "catboost"],
         default="xgboost",
         help="Choose the model to train",
     )
@@ -229,39 +323,48 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--cv",
-        action="store_true", 
+        action="store_true",
         help="Applies cross validation to the model selected",
     )
     parser.add_argument(
-        "--save_viz", 
-        action="store_true", 
-        help="Save the visualizations retrieved from feature engineeering", 
+        "--save_viz",
+        action="store_true",
+        help="Save the visualizations retrieved from feature engineeering",
     )
     parser.add_argument(
-        "--num_features", 
-        type=int, 
-        default=None, 
-        help="Specifies the number of features that you want to keep to train with the model. "
+        "--num_features",
+        type=int,
+        default=None,
+        help="Specifies the number of features that you want to keep to train with the model. ",
     )
     parser.add_argument(
-        "--save_test", 
-        action="store_true", 
-        help="Specify whether you want to download the test data. "
+        "--save_test",
+        action="store_true",
+        help="Specify whether you want to download the test data. ",
     )
     args = parser.parse_args()
 
     if not args.disable_preprocess:
-        base, X, y = preprocessing.Preprocessing(TRAIN, REGEXES, SCHEMAS).preprocessing(
-            0.80
+        base, X, y = preprocessing.Preprocessing(
+            TRAIN, REGEXES, SCHEMAS, mode="train"
+        ).preprocessing(0.80)
+        features = feature_engineering(
+            X, y.to_numpy().ravel(), args.num_features, args.save_viz
         )
-        features = feature_engineering(X, y.to_numpy().ravel(), args.num_features, args.save_viz)
-        if args.save_test: 
-            test_base, test_X, test_y = preprocessing.Preprocessing(TEST, REGEXES, SCHEMAS).preprocessing(
-                0.80
-            )
+        exit()
+        try:
+            os.mkdir(os.curdir + "/data")
+            os.mkdir(os.curdir + "/data/test")
+            os.mkdir(os.curdir + "/data/train")
+        except FileExistsError:
+            pass
+        if args.save_test:
+            test_base, test_X, _ = preprocessing.Preprocessing(
+                TEST, REGEXES, SCHEMAS, mode="test"
+            ).preprocessing(0.80)
             test_base.to_csv(os.curdir + "/data/test/base.csv")
+            features = list(set(features).intersection(list(test_X.columns)))
             test_X[features].to_csv(os.curdir + "/data/test/X_test.csv")
-            test_y.to_csv(os.curdir + "/data/test/y_test.csv")
         base.to_csv(os.curdir + "/data/train/base.csv")
         X[features].to_csv(os.curdir + "/data/train/X_train.csv")
         y.to_csv(os.curdir + "/data/train/y_train.csv")
@@ -283,13 +386,16 @@ if __name__ == "__main__":
         elif args.model == "xgboost":
             study = perform_xgboost(X, y, args.cv)
             bst = study.user_attrs["best_booster"]
+        elif args.model == "catboost":
+            study = perform_catboost(X, y, args.cv)
+            bst = study.user_attrs["best_booster"]
 
     if study and bst:
-        try: 
+        try:
             os.mkdir(os.curdir + "/model")
             os.mkdir(os.curdir + "/trials")
             os.mkdir(os.curdir + "/study")
-        except FileExistsError: 
+        except FileExistsError:
             pass
         timestr = time.strftime("%Y%m%d-%H%M%S")
         save_model(bst, args.model, timestr)
