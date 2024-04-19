@@ -15,9 +15,7 @@ import catboost as cb
 
 from catboost import Pool
 from pathlib import Path
-from sklearn.model_selection import (
-    train_test_split,
-)
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 from optuna.integration import CatBoostPruningCallback, LightGBMPruningCallback
 
@@ -41,7 +39,6 @@ SCHEMAS = {
 }
 
 REGEXES = ["^.*_base.*$", "^.*[a-z]_0.*$", "^.*[a-z]_1.*$", "^.*[a-z]_2.*$"]
-
 
 class SaveBestModel(xgb.callback.TrainingCallback):
     def __init__(self, cvboosters):
@@ -152,12 +149,9 @@ def perform_catboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
             "bootstrap_type": trial.suggest_categorical(
                 "bootstrap_type", ["Bayesian", "Bernoulli", "MVS"]
             ),
-            "task_type": "GPU",
             "use_best_model": True,
             "n_estimators": 600,
             "random_state": 42,
-            "learning_rate": trial.suggest_float("learning_rate", 1e-8, 1, log=True),
-            "used_ram_limit": "3gb",
             "eval_metric": "AUC",
         }
 
@@ -168,14 +162,10 @@ def perform_catboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
         elif param["bootstrap_type"] == "Bernoulli":
             param["subsample"] = trial.suggest_float("subsample", 0.1, 1, log=True)
 
-        pruning_callback = CatBoostPruningCallback(trial, "AUC")
-        cat = X.columns.to_frame(index=False, name="index")
-        cat_features = cat.loc[
-            X["index"].str.contains(r"categorical_*", na=False)
-        ].index.values
+        pruning_callback = CatBoostPruningCallback(trial, "AUC")  
 
         if cv:
-            dtrain = Pool(data=X, label=y, cat_features=cat_features)
+            dtrain = Pool(data=X, label=y)
             cb_cv, bst = cb.cv(
                 pool=dtrain,
                 params=param,
@@ -191,20 +181,19 @@ def perform_catboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
             train_X, valid_X, train_y, valid_y = train_test_split(
                 X, y, test_size=0.25, shuffle=True, random_state=42
             )
-            dtrain = Pool(data=train_X, label=train_y, cat_features=cat_features)
+            dtrain = Pool(data=train_X, label=train_y)
             gbm = cb.CatBoostClassifier(**param)
             gbm.fit(
                 train_X,
                 train_y,
                 eval_set=[(valid_X, valid_y)],
-                verbose=0,
                 early_stopping_rounds=100,
                 callbacks=[pruning_callback],
             )
             pruning_callback.check_pruned()
 
             trial.set_user_attr(key="best_booster", value=gbm)
-            preds = gbm.predict(valid_X, num_iterations=gbm.best_iteration)
+            preds = gbm.predict(valid_X, num_iterations=gbm.best_iteration_)
             auc = roc_auc_score(valid_y, preds)
         return auc
 
@@ -223,7 +212,7 @@ def perform_catboost(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
     return study
 
 
-def perform_lgb(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
+def perform_lgb(X: pd.DataFrame, y: pd.DataFrame):
 
     def objective(trial):
         param = {
@@ -244,28 +233,20 @@ def perform_lgb(X: pd.DataFrame, y: pd.DataFrame, cv: bool):
 
         pruning_callback = LightGBMPruningCallback(trial, "auc")
 
-        if cv:
-            dtrain = lgb.Dataset(X, label=y)
-            bst = lgb.cv(
-                param, dtrain, callbacks=[pruning_callback], return_cvbooster=True
-            )
-            trial.set_user_attr(key="best_booster", value=bst["cvbooster"])
-            auc = bst["valid auc-mean"][0]
-        else:
-            train_X, valid_X, train_y, valid_y = train_test_split(
-                X, y, test_size=0.25, shuffle=True, random_state=42
-            )
-            dtrain = lgb.Dataset(train_X, label=train_y)
-            dvalid = lgb.Dataset(valid_X, label=valid_y, reference=dtrain)
-            bst = lgb.train(
-                param,
-                dtrain,
-                valid_sets=dvalid,
-                callbacks=[pruning_callback],
-            )
-            trial.set_user_attr(key="best_booster", value=bst)
-            preds = bst.predict(valid_X, num_iterations=bst.best_iteration)
-            auc = roc_auc_score(valid_y, preds)
+        train_X, valid_X, train_y, valid_y = train_test_split(
+            X, y, test_size=0.25, shuffle=True, random_state=42
+        )
+        dtrain = lgb.Dataset(train_X, label=train_y)
+        dvalid = lgb.Dataset(valid_X, label=valid_y, reference=dtrain)
+        bst = lgb.train(
+            param,
+            dtrain,
+            valid_sets=dvalid,
+            callbacks=[pruning_callback],
+        )
+        trial.set_user_attr(key="best_booster", value=bst)
+        preds = bst.predict(valid_X, num_iterations=bst.best_iteration)
+        auc = roc_auc_score(valid_y, preds)
         return auc
 
     def get_best_booster(study, trial):
@@ -351,7 +332,6 @@ if __name__ == "__main__":
         features = feature_engineering(
             X, y.to_numpy().ravel(), args.num_features, args.save_viz
         )
-        exit()
         try:
             os.mkdir(os.curdir + "/data")
             os.mkdir(os.curdir + "/data/test")
@@ -381,7 +361,7 @@ if __name__ == "__main__":
         groups = base["WEEK_NUM"]
         if args.model == "lgb":
             X = X.rename(columns=lambda x: re.sub("[^A-Za-z0-9_]+", "", x))
-            study = perform_lgb(X, y, args.cv)
+            study = perform_lgb(X, y)
             bst = study.user_attrs["best_booster"]
         elif args.model == "xgboost":
             study = perform_xgboost(X, y, args.cv)

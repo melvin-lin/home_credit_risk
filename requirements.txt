@@ -15,3 +15,5 @@ cmake
 ninja
 dask[dataframe]
 catboost
+ipywidgets
+jupyter
